@@ -1,4 +1,4 @@
-package br.ufs.dcomp.ExemploRabbitMQ;
+package br.ufs.dcomp.ChatRabbitMQ;
 import java.util.*;
 import com.rabbitmq.client.*;
 import java.io.IOException;
