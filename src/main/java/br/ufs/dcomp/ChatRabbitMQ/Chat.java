@@ -8,6 +8,7 @@ import java.text.SimpleDateFormat;
 public class Chat {
 
   public static String user = "";
+  public static String userPrompt = "";
   
   public static String[] getDataHora(){
     String[] dataHora = new String[2];
@@ -26,8 +27,7 @@ public class Chat {
   
   public static void chatLoop(String texto, Scanner scanner,Channel channel,Consumer consumer,String QUEUE_NAME) throws Exception{
      
-    channel.basicConsume(QUEUE_NAME, true, consumer);
-    
+    channel.basicConsume(QUEUE_NAME, true, consumer);    
     String[] dataHora = getDataHora();
     String data = dataHora[0];
     String hora = dataHora[1];
@@ -35,16 +35,16 @@ public class Chat {
     
     while(texto.startsWith("@")){
         
-        Chat.user = texto;
+        userPrompt = texto;
         
         do{
-          sendTo = Chat.user.substring(1, Chat.user.length());  
-          System.out.print(Chat.user + ">> ");
+          sendTo = userPrompt.substring(1, userPrompt.length());  
+          System.out.print(userPrompt + ">> ");
           texto = scanner.nextLine();
           
           if(!texto.startsWith("@")){
               
-            String mensagem = "(" + data + " às " + hora + ") " + sendTo + " diz: " + texto;
+            String mensagem = "(" + data + " às " + hora + ") " + Chat.user + " diz: " + texto;
             channel.basicPublish("",sendTo, null,  mensagem.getBytes("UTF-8"));
           }
           
@@ -56,7 +56,7 @@ public class Chat {
 
   public static void main(String[] argv) throws Exception {
     ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("ec2-54-90-176-114.compute-1.amazonaws.com"); // Alterar
+    factory.setHost("ec2-54-80-198-139.compute-1.amazonaws.com"); // Alterar
     factory.setUsername("admin"); // Alterar
     factory.setPassword("password"); // Alterar
     factory.setVirtualHost("/");
@@ -68,6 +68,7 @@ public class Chat {
     System.out.print("User: ");
     String user = scanner.nextLine();
     String QUEUE_NAME = user;
+    Chat.user = user;
     channel.queueDeclare(QUEUE_NAME, false,   false,     false,       null);
     
     Consumer consumer = new DefaultConsumer(channel) {
@@ -76,7 +77,7 @@ public class Chat {
         
         String texto = new String(body, "UTF-8");
         System.out.println("\n"+texto);
-        System.out.print(Chat.user+">> ");
+        System.out.print(userPrompt+">> ");
 
       }
     };
