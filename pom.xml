@@ -24,6 +24,7 @@
         </configuration>
       </plugin>
     </plugins>
+    <finalName>Chat.jar</finalName>
   </build>
    <properties>
     <protobuf.version>3.11.1</protobuf.version>
