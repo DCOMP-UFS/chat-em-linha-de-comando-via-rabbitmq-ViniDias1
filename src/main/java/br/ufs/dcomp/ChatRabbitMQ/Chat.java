@@ -6,73 +6,236 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 
 public class Chat {
-  private static String sendTo;
-  private static String texto;
-  private static String user;
-  private static String userPrompt;
-  
-  public static String getData(){
+  private String user;
+  private String sendUser;
+  private String sendGroup;
+  private String userPrompt;
+  private Connection connection;
+  private Scanner scanner;
+
+  public Chat(String host, String username, String password, Scanner scanner) throws Exception{
+    this.scanner = scanner;
+    ConnectionFactory factory = new ConnectionFactory();
+    factory.setHost(host);
+    factory.setUsername(username);
+    factory.setPassword(password);
+    factory.setVirtualHost("/");
+    this.connection = factory.newConnection();
+  }
+
+  public Channel newChatChannel() throws IOException{//cria um canal para o user do chat
+    Channel channel = this.connection.createChannel();
+    try{
+      channel.queueDeclare(this.user, false,   false,     false,       null);
+      Consumer consumer = new DefaultConsumer(channel) {
+        public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)
+        throws IOException {
+          receiveBytes(body);
+        }
+      };
+      channel.basicConsume(this.user, true, consumer);
+
+    }
+    catch(IOException e){
+      System.out.println("Exceção ao tentar criar fila de usuário");
+    }
+    return channel;
+  }
+
+  public String getChatData(){
     DateFormat diaMesAno = new SimpleDateFormat("dd/MM/yyyy");
     Date date = new Date();
     String data = diaMesAno.format(date);
     return data;
-
   }
-  public static String getHora(){
+
+  public String getChatHora(){
     DateFormat horario = new SimpleDateFormat("HH:mm");
     Date date = new Date();
     String hora = horario.format(date);
     return hora;
   }
-  public static void setUser(String new_user){
-    user = new_user;
-  }
-  
-  public static void chatLoop(Scanner scanner, Channel channel) throws Exception{
+
+  public void checkAndSetUser(){
+    String _user;
     do{
-      System.out.print(">> ");
-      texto = scanner.nextLine();
-    }while(!texto.startsWith("@"));
-    userPrompt = texto;
-    sendTo = userPrompt.substring(1, userPrompt.length());
+      System.out.print("User: ");
+      _user = this.scanner.nextLine();
+    }while (!(_user.length() > 0));
+    user = _user;
+  }
+
+  public void receiveBytes(byte[] body) throws IOException{//rotina de recebimento de mensagem
+    ChatProto.Mensagem received = ChatProto.Mensagem.parseFrom(body);
+    String emissor = received.getEmissor();
+    if(emissor.equals(this.user)){//usuário não recebe mensagens que ele envia
+      return;
+    }
+    String tipo = received.getConteudo().getTipo();
+    String data = received.getData();
+    String hora = received.getHora();
+    String grupo = received.getGrupo();
+    String mensagem = received.getConteudo().getCorpo().toStringUtf8();
+    if(grupo != ""){
+      System.out.print("\n(" + data + " às " + hora + ") " + emissor + "#" + grupo +" diz: " + mensagem);
+    }
+    else{
+      System.out.print("\n(" + data + " às " + hora + ") " + emissor + " diz: " + mensagem);
+
+    }
+    System.out.print("\n" + userPrompt + ">> ");
+  }
+
+  private void createGroup(String group, Channel channel) throws IOException{
+    try{
+      channel.exchangeDeclare(group, "fanout");
+    }
+    catch(IOException e){
+      System.out.println(e);
+    }
+  }
+
+  private void addUserGroup(String user, String group, Channel channel) throws IOException{
+    try{
+      channel.queueBind(user, group, "");
+    }
+    catch(IOException e){
+      System.out.println(e);
+    }
+  }
+
+  private void removeUserGroup(String user, String group, Channel channel)throws IOException{
+    try{
+      channel.queueUnbind(user, group, "");
+    }
+    catch(IOException e){
+      System.out.println(e);
+    }
+  }
+  private void removeGroup(String group, Channel channel) throws IOException{
+    try{
+      channel.exchangeDelete(group);
+    }
+    catch(IOException e){
+      System.out.println(e);
+    }
+  }
+
+  private boolean userExists(String user, Channel channel) throws IOException{
+    try{
+      channel.queueDeclarePassive(user);
+      return true;
+    }
+    catch(IOException e){
+      System.out.println("Não há usuário " + "\"" + user + "\"");
+      return false;
+    }
+  }
+
+  private boolean groupExists(String group, Channel channel) throws IOException{
+    try{
+      channel.exchangeDeclarePassive(group);
+      return true;
+    }
+    catch(IOException e){
+      System.out.println("Não há grupo " + "\"" + group + "\"");
+      return false;
+    }
+  }
+
+  public void chatLoop() throws Exception{
+    String texto = null;
+    Channel channel = newChatChannel();//criando canal associado ao chatLoop
+    sendUser = "";
+    sendGroup = "";
+    userPrompt = "";
+
     while(true){
-      System.out.print(userPrompt + ">> ");
-      texto = scanner.nextLine();
-      if(texto.startsWith("@")) {
-        userPrompt = texto;
-        sendTo = userPrompt.substring(1, userPrompt.length());
+      do{
+        System.out.print(userPrompt + ">> ");
+        texto = this.scanner.nextLine();
+      }while(!(texto.length() != 0));
+
+      char comparator = texto.charAt(0);//CONTINUAR: TESTES DE ARGUMENTOS(FUNÇÃO CHECK ARGS)
+      if(comparator == '@'){//prompt individual
+        sendUser = texto.substring(1, texto.length());
+        if(userExists(sendUser, channel)){
+          userPrompt = texto;
+          sendGroup = "";
+        }
+        else{
+          channel = newChatChannel();
+        }
+      }
+      else if (comparator == '!'){//operações com grupo
+        String tokens[] = texto.substring(1, texto.length()).split(" ");
+        if(tokens[0].equals("addGroup")){//adicionar bind para o mesmo usuário que cria o grupo
+          createGroup(tokens[1], channel);
+          addUserGroup(user, tokens[1], channel);
+        }
+        else if(tokens[0].equals("addUser")){
+          if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
+            addUserGroup(tokens[1], tokens[2], channel);
+          }
+          else{
+            channel = newChatChannel();
+          }
+        }
+        else if(tokens[0].equals("delFromGroup")){
+          if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
+            removeUserGroup(tokens[1], tokens[2], channel);
+          }
+          else{
+            channel = newChatChannel();
+          }
+        }
+        else if(tokens[0].equals("removeGroup")){
+          if(groupExists(tokens[1], channel)){
+            removeGroup(tokens[1], channel);
+          }
+          else{
+            channel = newChatChannel();
+          }
+        }
+        else{
+          System.out.println("Não há operação de grupo correspondente");
+        }
+      }
+      else if (comparator == '#'){//prompt de grupo
+        sendGroup = texto.substring(1, texto.length());
+        if(groupExists(sendGroup, channel)){
+          userPrompt = texto;
+          sendUser = "";
+        }
+        else{
+          channel = newChatChannel();
+        }
+
+      }
+      else if (userPrompt.length() != 0){//envio de mensagem text/plain
+        ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
+        c.setTipo("text/plain");
+        c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(texto));
+        ChatProto.Conteudo content = c.build();
+        ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
+        m.setEmissor(user);
+        m.setData(getChatData());
+        m.setHora(getChatHora());
+        m.setConteudo(content);
+        m.setGrupo(sendGroup);
+        ChatProto.Mensagem mensagem = m.build();
+        channel.basicPublish(sendGroup, sendUser, null,  mensagem.toByteArray());
       }
       else{
-        String mensagem = "(" + getData() + " às " + getHora() + ") " + Chat.user + " diz: " + texto;
-        channel.basicPublish("",sendTo, null,  mensagem.getBytes("UTF-8"));
+        System.out.println("Operação inválida");
       }
     }
   }
   
   public static void main(String[] argv) throws Exception {
-    ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("ec2-54-224-2-21.compute-1.amazonaws.com"); // Alterar
-    factory.setUsername("admin"); // Alterar
-    factory.setPassword("password"); // Alterar
-    factory.setVirtualHost("/");
-    Connection connection = factory.newConnection();
-    Channel channel = connection.createChannel();
-    Scanner scanner = new Scanner(System.in);
-    System.out.print("User: ");
-    String user = scanner.nextLine();
-    String QUEUE_NAME = user;
-    Chat.setUser(user);
-    channel.queueDeclare(QUEUE_NAME, false,   false,     false,       null);
-    Consumer consumer = new DefaultConsumer(channel) {
-      public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)
-      throws IOException {
-        String texto = new String(body, "UTF-8");
-        System.out.println("\n"+texto);
-        System.out.print(userPrompt+">> ");
-
-      }
-    };
-    channel.basicConsume(QUEUE_NAME, true, consumer);
-    chatLoop(scanner, channel);
+    Chat chat =  new Chat("ec2-3-81-210-123.compute-1.amazonaws.com",
+    "admin", "password", new Scanner(System.in));
+    chat.checkAndSetUser();
+    chat.chatLoop();
   }
 }
