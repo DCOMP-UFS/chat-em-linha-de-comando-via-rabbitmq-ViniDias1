@@ -143,6 +143,55 @@ public class Chat {
     }
   }
 
+  private boolean sendGroupMessage(Channel channel, String group, String message) throws IOException{//envio de mensagem text/plain para grupo
+    try{
+      if(!groupExists(group, channel)) {
+        this.sendGroup = "";
+        this.userPrompt = "";
+        return false;
+      }
+      ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
+      c.setTipo("text/plain");
+      c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(message));
+      ChatProto.Conteudo content = c.build();
+      ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
+      m.setEmissor(this.user);
+      m.setData(getChatData());
+      m.setHora(getChatHora());
+      m.setConteudo(content);
+      m.setGrupo(group);
+      ChatProto.Mensagem mensagem = m.build();
+      channel.basicPublish(group, "", null,  mensagem.toByteArray());
+      return true;
+    }
+    catch(IOException e){
+      System.out.println(e);
+      return false;
+    }
+  }
+
+  private boolean sendUserMessage(Channel channel, String user, String message) throws IOException{//envio de mensagem text/plain para usuário
+    try{
+      ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
+      c.setTipo("text/plain");
+      c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(message));
+      ChatProto.Conteudo content = c.build();
+      ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
+      m.setEmissor(this.user);
+      m.setData(getChatData());
+      m.setHora(getChatHora());
+      m.setConteudo(content);
+      m.setGrupo("");
+      ChatProto.Mensagem mensagem = m.build();
+      channel.basicPublish("", sendUser, null,  mensagem.toByteArray());
+      return true;
+    }
+    catch(IOException e){
+      System.out.println(e);
+      return false;
+    }
+  }
+
   public void chatLoop() throws Exception{
     String texto = null;
     Channel channel = newChatChannel();//criando canal associado ao chatLoop
@@ -155,8 +204,8 @@ public class Chat {
         System.out.print(userPrompt + ">> ");
         texto = this.scanner.nextLine();
       }while(!(texto.length() != 0));
+      char comparator = texto.charAt(0);
 
-      char comparator = texto.charAt(0);//CONTINUAR: TESTES DE ARGUMENTOS(FUNÇÃO CHECK ARGS)
       if(comparator == '@'){//prompt individual
         sendUser = texto.substring(1, texto.length());
         if(userExists(sendUser, channel)){
@@ -169,11 +218,12 @@ public class Chat {
       }
       else if (comparator == '!'){//operações com grupo
         String tokens[] = texto.substring(1, texto.length()).split(" ");
-        if(tokens[0].equals("addGroup")){//adicionar bind para o mesmo usuário que cria o grupo
+        int tokens_len = tokens.length;
+        if(tokens[0].equals("addGroup") && tokens_len == 2){
           createGroup(tokens[1], channel);
           addUserGroup(user, tokens[1], channel);
         }
-        else if(tokens[0].equals("addUser")){
+        else if(tokens[0].equals("addUser") && tokens_len == 3){
           if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
             addUserGroup(tokens[1], tokens[2], channel);
           }
@@ -181,7 +231,7 @@ public class Chat {
             channel = newChatChannel();
           }
         }
-        else if(tokens[0].equals("delFromGroup")){
+        else if(tokens[0].equals("delFromGroup") && tokens_len == 3){
           if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
             removeUserGroup(tokens[1], tokens[2], channel);
           }
@@ -189,7 +239,7 @@ public class Chat {
             channel = newChatChannel();
           }
         }
-        else if(tokens[0].equals("removeGroup")){
+        else if(tokens[0].equals("removeGroup") && tokens_len == 2){
           if(groupExists(tokens[1], channel)){
             removeGroup(tokens[1], channel);
           }
@@ -210,21 +260,18 @@ public class Chat {
         else{
           channel = newChatChannel();
         }
-
       }
       else if (userPrompt.length() != 0){//envio de mensagem text/plain
-        ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
-        c.setTipo("text/plain");
-        c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(texto));
-        ChatProto.Conteudo content = c.build();
-        ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
-        m.setEmissor(user);
-        m.setData(getChatData());
-        m.setHora(getChatHora());
-        m.setConteudo(content);
-        m.setGrupo(sendGroup);
-        ChatProto.Mensagem mensagem = m.build();
-        channel.basicPublish(sendGroup, sendUser, null,  mensagem.toByteArray());
+        if(sendUser != ""){
+          if(!sendUserMessage(channel, sendUser, texto)){
+            channel = newChatChannel();
+          }
+        }
+        else if(sendGroup != ""){
+          if(!sendGroupMessage(channel, sendGroup, texto)){
+            channel = newChatChannel();
+          }
+        }
       }
       else{
         System.out.println("Operação inválida");
@@ -233,7 +280,7 @@ public class Chat {
   }
   
   public static void main(String[] argv) throws Exception {
-    Chat chat =  new Chat("ec2-3-81-210-123.compute-1.amazonaws.com",
+    Chat chat =  new Chat("ec2-54-80-245-137.compute-1.amazonaws.com",
     "admin", "password", new Scanner(System.in));
     chat.checkAndSetUser();
     chat.chatLoop();
