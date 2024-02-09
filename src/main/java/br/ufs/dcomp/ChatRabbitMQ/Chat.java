@@ -4,6 +4,9 @@ import com.rabbitmq.client.*;
 import java.io.IOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.io.FileOutputStream;
+import java.io.File;
+import java.lang.Thread;
 
 public class Chat {
   private String user;
@@ -66,15 +69,21 @@ public class Chat {
   public void receiveBytes(byte[] body) throws IOException{//rotina de recebimento de mensagem
     ChatProto.Mensagem received = ChatProto.Mensagem.parseFrom(body);
     String emissor = received.getEmissor();
-    if(emissor.equals(this.user)){//usuário não recebe mensagens que ele envia
+    /*if(emissor.equals(this.user)){//usuário não recebe mensagens que ele envia
       return;
-    }
+    }*/
     String tipo = received.getConteudo().getTipo();
     String data = received.getData();
     String hora = received.getHora();
     String grupo = received.getGrupo();
     String mensagem = received.getConteudo().getCorpo().toStringUtf8();
-    //verificação de tipo != text/plain
+    String nome_arquivo = received.getConteudo().getNome();
+    if(tipo != "text/plain"){
+      FileOutputStream out = new FileOutputStream(nome_arquivo);
+      out.write(mensagem.getBytes());
+      out.close();
+      return;
+    }
     if(grupo != ""){
       System.out.print("\n(" + data + " às " + hora + ") " + emissor + "#" + grupo +" diz: " + mensagem);
     }
@@ -247,6 +256,10 @@ public class Chat {
             channel = newChatChannel();
           }
         }
+        else if(tokens[0].equals("upload") && tokens_len == 2){
+          Thread t = new Thread(new ArchiveUpload(tokens[1], channel, this.user, sendUser, sendGroup));
+          t.start();
+        }
         else{
           System.out.println("Não há operação de grupo correspondente");
         }
@@ -280,7 +293,7 @@ public class Chat {
   }
   
   public static void main(String[] argv) throws Exception {
-    Chat chat =  new Chat("ec2-54-80-245-137.compute-1.amazonaws.com",
+    Chat chat =  new Chat("ec2-35-173-190-47.compute-1.amazonaws.com",
     "admin", "password", new Scanner(System.in));
     chat.checkAndSetUser();
     chat.chatLoop();
