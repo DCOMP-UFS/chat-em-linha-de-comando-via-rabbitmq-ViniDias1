@@ -42,14 +42,14 @@ public class Chat {
     return channel;
   }
 
-  public String getChatData(){
+  public static String getChatData(){
     DateFormat diaMesAno = new SimpleDateFormat("dd/MM/yyyy");
     Date date = new Date();
     String data = diaMesAno.format(date);
     return data;
   }
 
-  public String getChatHora(){
+  public static String getChatHora(){
     DateFormat horario = new SimpleDateFormat("HH:mm");
     Date date = new Date();
     String hora = horario.format(date);
@@ -57,12 +57,10 @@ public class Chat {
   }
 
   public void checkAndSetUser(){
-    String _user;
     do{
       System.out.print("User: ");
-      _user = this.scanner.nextLine();
-    }while (!(_user.length() > 0));
-    user = _user;
+      this.user = this.scanner.nextLine();
+    }while (!(this.user.length() > 0));
   }
 
   public void receiveBytes(byte[] body) throws IOException{//rotina de recebimento de mensagem
@@ -76,6 +74,7 @@ public class Chat {
     String hora = received.getHora();
     String grupo = received.getGrupo();
     String mensagem = received.getConteudo().getCorpo().toStringUtf8();
+    //verificação de tipo != text/plain
     if(grupo != ""){
       System.out.print("\n(" + data + " às " + hora + ") " + emissor + "#" + grupo +" diz: " + mensagem);
     }
@@ -112,6 +111,7 @@ public class Chat {
       System.out.println(e);
     }
   }
+
   private void removeGroup(String group, Channel channel) throws IOException{
     try{
       channel.exchangeDelete(group);
