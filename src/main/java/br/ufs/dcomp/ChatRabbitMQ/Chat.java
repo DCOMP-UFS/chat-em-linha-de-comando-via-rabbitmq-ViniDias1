@@ -7,6 +7,10 @@ import java.text.SimpleDateFormat;
 import java.io.FileOutputStream;
 import java.io.File;
 import java.lang.Thread;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.function.BiConsumer;
 
 public class Chat {
   private String user;
@@ -15,8 +19,17 @@ public class Chat {
   private String userPrompt;
   private Connection connection;
   private Scanner scanner;
+  private String uploadsDirectory;
+  private Map<String, BiConsumer<String[], ChannelWrapper>> commands;
 
   public Chat(String host, String username, String password, Scanner scanner) throws Exception{
+    this.uploadsDirectory = "downloads";
+    this.commands = new HashMap<>();
+    this.commands.put("addGroup", this::createGroup);
+    this.commands.put("addUser", this::addUserGroup);
+    this.commands.put("delFromGroup", this::removeUserGroup);
+    this.commands.put("removeGroup", this::removeGroup);
+    this.commands.put("upload", this::upload);
     this.scanner = scanner;
     ConnectionFactory factory = new ConnectionFactory();
     factory.setHost(host);
@@ -26,18 +39,22 @@ public class Chat {
     this.connection = factory.newConnection();
   }
 
-  public Channel newChatChannel() throws IOException{//cria um canal para o user do chat
-    Channel channel = this.connection.createChannel();
+  public Channel newChatChannel(boolean is_publish_channel){
+    Channel channel = null;
     try{
-      channel.queueDeclare(this.user, false,   false,     false,       null);
-      Consumer consumer = new DefaultConsumer(channel) {
-        public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)
-        throws IOException {
-          receiveBytes(body);
-        }
-      };
-      channel.basicConsume(this.user, true, consumer);
-
+      channel = this.connection.createChannel();
+      if(!is_publish_channel){
+        channel.queueDeclare(user, false,   false,     false,       null);
+        channel.queueDeclare(user + "_archives", false,   false,     false,       null);
+        Consumer consumer = new DefaultConsumer(channel){
+          public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)
+          throws IOException {
+            receiveBytes(body);
+          }
+        };
+        channel.basicConsume(user, true, consumer);
+        channel.basicConsume(user + "_archives", true, consumer);
+    }
     }
     catch(IOException e){
       System.out.println("Exceção ao tentar criar fila de usuário");
@@ -62,148 +79,215 @@ public class Chat {
   public void checkAndSetUser(){
     do{
       System.out.print("User: ");
-      this.user = this.scanner.nextLine();
-    }while (!(this.user.length() > 0));
+      user = scanner.nextLine();
+    }while (!(user.length() > 0));
   }
 
-  public void receiveBytes(byte[] body) throws IOException{//rotina de recebimento de mensagem
-    ChatProto.Mensagem received = ChatProto.Mensagem.parseFrom(body);
-    String emissor = received.getEmissor();
-    /*if(emissor.equals(this.user)){//usuário não recebe mensagens que ele envia
-      return;
-    }*/
-    String tipo = received.getConteudo().getTipo();
-    String data = received.getData();
-    String hora = received.getHora();
-    String grupo = received.getGrupo();
-    String mensagem = received.getConteudo().getCorpo().toStringUtf8();
-    String nome_arquivo = received.getConteudo().getNome();
-    if(tipo != "text/plain"){
-      FileOutputStream out = new FileOutputStream(nome_arquivo);
-      out.write(mensagem.getBytes());
-      out.close();
-      return;
-    }
-    if(grupo != ""){
-      System.out.print("\n(" + data + " às " + hora + ") " + emissor + "#" + grupo +" diz: " + mensagem);
-    }
-    else{
-      System.out.print("\n(" + data + " às " + hora + ") " + emissor + " diz: " + mensagem);
-
-    }
-    System.out.print("\n" + userPrompt + ">> ");
-  }
-
-  private void createGroup(String group, Channel channel) throws IOException{
+  public void receiveBytes(byte[] body){//rotina de recebimento de mensagem
     try{
-      channel.exchangeDeclare(group, "fanout");
+      ChatProto.Mensagem received = ChatProto.Mensagem.parseFrom(body);
+      String emissor = received.getEmissor();
+      if(emissor.equals(user)){//usuário não recebe mensagens que ele envia
+        return;
+      }
+      String tipo = received.getConteudo().getTipo();
+      String data = received.getData();
+      String hora = received.getHora();
+      String grupo = received.getGrupo();
+      String mensagem = received.getConteudo().getCorpo().toStringUtf8();
+      String nome_arquivo = received.getConteudo().getNome();
+      if(!tipo.equals("text/plain")){//recebimento de arquivo
+        if(!Files.exists(Paths.get(uploadsDirectory))){
+          File pasta = new File(uploadsDirectory);
+          pasta.mkdir();
+        }
+        FileOutputStream out = new FileOutputStream(uploadsDirectory + File.separator + nome_arquivo);
+        out.write(mensagem.getBytes());
+        out.close();
+        System.out.println("\n(" + data + " às " + hora + ") Arquivo \"" + nome_arquivo + "\" recebido de @" + emissor + " !");
+      }
+      else if(!grupo.equals("")){//recebimento de mensagem de grupo
+        System.out.println("\n(" + data + " às " + hora + ") " + emissor + "#" + grupo +" diz: " + mensagem);
+      }
+      else{//recebimento de mensagem de usuário
+        System.out.println("\n(" + data + " às " + hora + ") " + emissor + " diz: " + mensagem);
+      }
+      System.out.print(userPrompt + ">> ");
     }
-    catch(IOException e){
-      System.out.println(e);
+    catch (IOException e){
+      System.out.println("Erro ao receber mensagem");
     }
   }
 
-  private void addUserGroup(String user, String group, Channel channel) throws IOException{
+  private boolean userExists(String user, ChannelWrapper channelw){
     try{
-      channel.queueBind(user, group, "");
-    }
-    catch(IOException e){
-      System.out.println(e);
-    }
-  }
-
-  private void removeUserGroup(String user, String group, Channel channel)throws IOException{
-    try{
-      channel.queueUnbind(user, group, "");
-    }
-    catch(IOException e){
-      System.out.println(e);
-    }
-  }
-
-  private void removeGroup(String group, Channel channel) throws IOException{
-    try{
-      channel.exchangeDelete(group);
-    }
-    catch(IOException e){
-      System.out.println(e);
-    }
-  }
-
-  private boolean userExists(String user, Channel channel) throws IOException{
-    try{
-      channel.queueDeclarePassive(user);
+      channelw.getChannel().queueDeclarePassive(user);
       return true;
     }
     catch(IOException e){
       System.out.println("Não há usuário " + "\"" + user + "\"");
+      channelw.setChannel(newChatChannel(false));
       return false;
     }
   }
 
-  private boolean groupExists(String group, Channel channel) throws IOException{
+  private boolean groupExists(String group, ChannelWrapper channelw){
     try{
-      channel.exchangeDeclarePassive(group);
+      channelw.getChannel().exchangeDeclarePassive(group);
       return true;
     }
     catch(IOException e){
       System.out.println("Não há grupo " + "\"" + group + "\"");
+      channelw.setChannel(newChatChannel(false));
       return false;
     }
   }
 
-  private boolean sendGroupMessage(Channel channel, String group, String message) throws IOException{//envio de mensagem text/plain para grupo
+  private void createGroup(String[] tokens, ChannelWrapper channelw){
     try{
-      if(!groupExists(group, channel)) {
-        this.sendGroup = "";
-        this.userPrompt = "";
-        return false;
+      if(tokens.length != 2){
+        System.out.println("Número de argumentos incorreto");
+        return;
+      }
+      String group = tokens[1];
+      channelw.getChannel().exchangeDeclare(group, "direct");
+    }
+    catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
+      System.out.println(e);
+    }
+  }
+
+  private void addUserGroup(String[] tokens, ChannelWrapper channelw){
+    try{
+      if(tokens.length != 3){
+        System.out.println("Número de argumentos incorreto");
+        return;
+      }
+      String user = tokens[1];
+      String group = tokens[2];
+      if(groupExists(group, channelw) && userExists(user, channelw)){
+        Channel channel = channelw.getChannel();
+        channel.queueBind(user, group, "message");
+        channel.queueBind(user + "_archives", group, "archive");
+      }
+    }
+    catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
+      System.out.println(e);
+    }
+  }
+
+  private void removeUserGroup(String[] tokens, ChannelWrapper channelw){
+    try{
+      if(tokens.length != 3){
+        System.out.println("Número de argumentos incorreto");
+        return;
+      }
+      String user = tokens[1];
+      String group = tokens[2];
+      if(userExists(user, channelw) && groupExists(group, channelw)){
+        channelw.getChannel().queueUnbind(user, group, "");
+      }
+    }
+    catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
+      System.out.println(e);
+    }
+  }
+
+  private void removeGroup(String[] tokens, ChannelWrapper channelw){
+    try{
+      if(tokens.length != 2){
+        System.out.println("Número de argumentos incorreto");
+        return;
+      }
+      String group = tokens[1];
+      if(groupExists(group, channelw)){
+        channelw.getChannel().exchangeDelete(group);
+      }
+    }
+    catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
+      System.out.println(e);
+    }
+  }
+
+  private void sendGroupMessage(ChannelWrapper channelw, String message){//envio de mensagem text/plain para grupo
+    try{
+      if(!groupExists(sendGroup, channelw)) {
+        sendGroup = "";
+        userPrompt = "";
+        return;
       }
       ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
       c.setTipo("text/plain");
       c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(message));
       ChatProto.Conteudo content = c.build();
       ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
-      m.setEmissor(this.user);
+      m.setEmissor(user);
       m.setData(getChatData());
       m.setHora(getChatHora());
       m.setConteudo(content);
-      m.setGrupo(group);
+      m.setGrupo(sendGroup);
       ChatProto.Mensagem mensagem = m.build();
-      channel.basicPublish(group, "", null,  mensagem.toByteArray());
-      return true;
+      channelw.getChannel().basicPublish(sendGroup, "message", null,  mensagem.toByteArray());
     }
     catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
       System.out.println(e);
-      return false;
     }
   }
 
-  private boolean sendUserMessage(Channel channel, String user, String message) throws IOException{//envio de mensagem text/plain para usuário
+  private void sendUserMessage(ChannelWrapper channelw, String message){//envio de mensagem text/plain para usuário
     try{
       ChatProto.Conteudo.Builder c = ChatProto.Conteudo.newBuilder();
       c.setTipo("text/plain");
       c.setCorpo(com.google.protobuf.ByteString.copyFromUtf8(message));
       ChatProto.Conteudo content = c.build();
       ChatProto.Mensagem.Builder m = ChatProto.Mensagem.newBuilder();
-      m.setEmissor(this.user);
+      m.setEmissor(user);
       m.setData(getChatData());
       m.setHora(getChatHora());
       m.setConteudo(content);
       m.setGrupo("");
       ChatProto.Mensagem mensagem = m.build();
-      channel.basicPublish("", sendUser, null,  mensagem.toByteArray());
-      return true;
+      channelw.getChannel().basicPublish("", sendUser, null,  mensagem.toByteArray());
     }
     catch(IOException e){
+      channelw.setChannel(newChatChannel(false));
       System.out.println(e);
-      return false;
     }
   }
+  private void upload(String[] tokens, ChannelWrapper channelw){
+    if(tokens.length != 2){
+      System.out.println("Número de argumentos incorreto");
+      return;
+    }
+    if(sendUser.equals("") && sendGroup.equals("")){
+      System.out.println("Não há destinatário");
+      return;
+    }
+    Path path = Paths.get(tokens[1]);
+    if(!Files.exists(path)){
+      System.out.println("Arquivo \"" + path.toString() + "\" não existe");
+      return;
+    }
+    ArchiveUpload upload_object = new ArchiveUpload();
+    upload_object.setEmissor(user);
+    upload_object.setReceptor(sendUser);//arquivos são publicados na fila de arquivos do receptor
+    upload_object.setPath(path);
+    upload_object.setGroup(sendGroup);
+    upload_object.setUserPrompt(userPrompt);
+    upload_object.setChannelWrapper(new ChannelWrapper(newChatChannel(true)));//cria um canal novo para enviar o arquivo
+    Thread t = new Thread(upload_object);
+    t.start();
+    System.out.println("Enviando \"" + path.toString() + "\"" + " para " + userPrompt + ".");
+  }
 
-  public void chatLoop() throws Exception{
-    String texto = null;
-    Channel channel = newChatChannel();//criando canal associado ao chatLoop
+  public void chatLoop(){
+    ChannelWrapper channelw = new ChannelWrapper(newChatChannel(false));//criando canal associado ao chatLoop
+    String texto = "";
     sendUser = "";
     sendGroup = "";
     userPrompt = "";
@@ -211,89 +295,51 @@ public class Chat {
     while(true){
       do{
         System.out.print(userPrompt + ">> ");
-        texto = this.scanner.nextLine();
+        texto = scanner.nextLine();
       }while(!(texto.length() != 0));
-      char comparator = texto.charAt(0);
 
+      char comparator = texto.charAt(0);
       if(comparator == '@'){//prompt individual
-        sendUser = texto.substring(1, texto.length());
-        if(userExists(sendUser, channel)){
+        String user = texto.substring(1, texto.length());
+        if(userExists(user, channelw)){
           userPrompt = texto;
+          sendUser = user;
           sendGroup = "";
         }
-        else{
-          channel = newChatChannel();
-        }
       }
-      else if (comparator == '!'){//operações com grupo
+      else if (comparator == '!'){//operações
         String tokens[] = texto.substring(1, texto.length()).split(" ");
-        int tokens_len = tokens.length;
-        if(tokens[0].equals("addGroup") && tokens_len == 2){
-          createGroup(tokens[1], channel);
-          addUserGroup(user, tokens[1], channel);
-        }
-        else if(tokens[0].equals("addUser") && tokens_len == 3){
-          if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
-            addUserGroup(tokens[1], tokens[2], channel);
-          }
-          else{
-            channel = newChatChannel();
-          }
-        }
-        else if(tokens[0].equals("delFromGroup") && tokens_len == 3){
-          if(userExists(tokens[1], channel) && groupExists(tokens[2], channel)){
-            removeUserGroup(tokens[1], tokens[2], channel);
-          }
-          else{
-            channel = newChatChannel();
-          }
-        }
-        else if(tokens[0].equals("removeGroup") && tokens_len == 2){
-          if(groupExists(tokens[1], channel)){
-            removeGroup(tokens[1], channel);
-          }
-          else{
-            channel = newChatChannel();
-          }
-        }
-        else if(tokens[0].equals("upload") && tokens_len == 2){
-          Thread t = new Thread(new ArchiveUpload(tokens[1], channel, this.user, sendUser, sendGroup));
-          t.start();
+        if(commands.containsKey(tokens[0])){
+          BiConsumer<String[], ChannelWrapper> returned_method = commands.get(tokens[0]);
+          returned_method.accept(tokens, channelw);
         }
         else{
-          System.out.println("Não há operação de grupo correspondente");
+          System.out.println("Não há operação correspondente");
         }
       }
       else if (comparator == '#'){//prompt de grupo
-        sendGroup = texto.substring(1, texto.length());
-        if(groupExists(sendGroup, channel)){
+        String group = texto.substring(1, texto.length());
+        if(groupExists(group, channelw)){
           userPrompt = texto;
+          sendGroup = group;
           sendUser = "";
-        }
-        else{
-          channel = newChatChannel();
         }
       }
       else if (userPrompt.length() != 0){//envio de mensagem text/plain
-        if(sendUser != ""){
-          if(!sendUserMessage(channel, sendUser, texto)){
-            channel = newChatChannel();
-          }
+        if(!sendUser.equals("")){
+          sendUserMessage(channelw, texto);
         }
-        else if(sendGroup != ""){
-          if(!sendGroupMessage(channel, sendGroup, texto)){
-            channel = newChatChannel();
-          }
+        else{
+          sendGroupMessage(channelw, texto);
         }
       }
       else{
         System.out.println("Operação inválida");
       }
     }
-  }
-  
+  }  
   public static void main(String[] argv) throws Exception {
-    Chat chat =  new Chat("ec2-35-173-190-47.compute-1.amazonaws.com",
+    Chat chat =  new Chat("34.207.225.196",
     "admin", "password", new Scanner(System.in));
     chat.checkAndSetUser();
     chat.chatLoop();
