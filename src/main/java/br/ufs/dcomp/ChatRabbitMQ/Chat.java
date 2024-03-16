@@ -11,8 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.function.BiConsumer;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URL;
+import java.net.HttpURLConnection;
+import org.json.JSONArray;
 
 public class Chat {
+  private String host;
   private String user;
   private String sendUser;
   private String sendGroup;
@@ -24,12 +30,15 @@ public class Chat {
 
   public Chat(String host, String username, String password, Scanner scanner) throws Exception{
     this.uploadsDirectory = "downloads";
+    this.host = host;
     this.commands = new HashMap<>();
     this.commands.put("addGroup", this::createGroup);
     this.commands.put("addUser", this::addUserGroup);
     this.commands.put("delFromGroup", this::removeUserGroup);
     this.commands.put("removeGroup", this::removeGroup);
     this.commands.put("upload", this::upload);
+    this.commands.put("listUsers", this::listUsers);
+    this.commands.put("listGroups", this::listGroups);  
     this.scanner = scanner;
     ConnectionFactory factory = new ConnectionFactory();
     factory.setHost(host);
@@ -284,7 +293,72 @@ public class Chat {
     t.start();
     System.out.println("Enviando \"" + path.toString() + "\"" + " para " + userPrompt + ".");
   }
+  
+  private void listUsers(String tokens[], ChannelWrapper channelw){
+    if(tokens.length != 2){
+      System.out.println("Número de argumentos incorreto");
+      return;
+    }
+    String webService = "http://" + host + ":15672/api/exchanges/%2F/" + tokens[1] + "/bindings/source";
+    try{
+      URL url = new URL(webService);
+      HttpURLConnection conexao = (HttpURLConnection) url.openConnection();
+      String basicAuth = "Basic " + new String(java.util.Base64.getEncoder().encode(("admin:password").getBytes()));
+      conexao.setRequestProperty("Authorization", basicAuth);
+      if(conexao.getResponseCode() == 200){
+        BufferedReader content = new BufferedReader(new InputStreamReader(conexao.getInputStream()));
+        String stringJson = "";
+        String buf = "";
+        while((buf = content.readLine()) != null){
+          stringJson += buf;
+        }
+        JSONArray json = new JSONArray(stringJson);
+        for(int i = 0; i < json.length(); i+=2){
+          System.out.print(json.getJSONObject(i).getString("destination"));
+          if(i != json.length()- 1) System.out.print(", ");
+        }
+        System.out.println();
+      }
+      else{
+        throw new RuntimeException("Erro HTTP: " + conexao.getResponseCode());
+      }
+    }
+    catch(Exception e){
+      System.out.println("Erro ao tentar acessar web service" + e);
+      e.printStackTrace();
+    }
 
+  }
+  private void listGroups(String tokens[], ChannelWrapper channelw){
+    String webService = "http://" + host + ":15672/api/queues/%2F/" + user + "/bindings";
+      try{
+      URL url = new URL(webService);
+      HttpURLConnection conexao = (HttpURLConnection) url.openConnection();
+      String basicAuth = "Basic " + new String(java.util.Base64.getEncoder().encode(("admin:password").getBytes()));
+      conexao.setRequestProperty("Authorization", basicAuth);
+      if(conexao.getResponseCode() == 200){
+        BufferedReader content = new BufferedReader(new InputStreamReader(conexao.getInputStream()));
+        String stringJson = "";
+        String buf = "";
+        while((buf = content.readLine()) != null){
+          stringJson += buf;
+        }
+        JSONArray json = new JSONArray(stringJson);
+        for(int i = 1; i < json.length(); i++){
+          System.out.print(json.getJSONObject(i).getString("source"));
+          if(i != json.length() - 1) System.out.print(", ");
+        }
+        System.out.println();
+      }
+      else{
+        throw new RuntimeException("Erro HTTP: " + conexao.getResponseCode());
+      }
+    }
+    catch(Exception e){
+      System.out.println("Erro ao tentar acessar web service" + e);
+      e.printStackTrace();
+    }
+  }
   public void chatLoop(){
     ChannelWrapper channelw = new ChannelWrapper(newChatChannel(false));//criando canal associado ao chatLoop
     String texto = "";
@@ -339,7 +413,7 @@ public class Chat {
     }
   }  
   public static void main(String[] argv) throws Exception {
-    Chat chat =  new Chat("34.207.225.196",
+    Chat chat =  new Chat("100.26.35.102",
     "admin", "password", new Scanner(System.in));
     chat.checkAndSetUser();
     chat.chatLoop();
